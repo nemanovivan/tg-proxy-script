@@ -19,9 +19,7 @@ DEFAULT_PORT=443
 FALLBACK_PORTS=(8443 2053 2087 2096)
 STATS_PORT=3129
 CONFIG_FILE="$(pwd)/config.toml"
-
-# Образ - используем ghcr.io как зеркало вместо Docker Hub
-MTG_IMAGE="ghcr.io/nineseconds/mtg:2"
+MTG_IMAGE="nineseconds/mtg:2"
 
 # ============================================
 # Функции
@@ -124,38 +122,13 @@ install_docker() {
     log_info "Docker успешно установлен: $(docker --version)"
 }
 
-# Скачиваем образ с fallback логикой
-pull_image() {
-    log_step "Загрузка образа MTG"
-
-    # Список зеркал в порядке приоритета
-    local mirrors=(
-        "ghcr.io/nineseconds/mtg:2"
-        "nineseconds/mtg:2"
-    )
-
-    for image in "${mirrors[@]}"; do
-        log_info "Пробуем загрузить образ: $image"
-        if docker pull "$image" 2>/dev/null; then
-            log_info "Образ успешно загружен: $image"
-            MTG_IMAGE="$image"
-            return
-        fi
-        log_warn "Не удалось загрузить с $image, пробуем следующее..."
-    done
-
-    log_error "Не удалось загрузить образ ни с одного источника!"
-    log_error "Попробуйте: docker login - и запустите скрипт снова"
-    exit 1
-}
-
 generate_secret() {
     log_step "Генерация секрета MTG"
 
     log_info "Используем домен: $DEFAULT_DOMAIN"
 
-    SECRET=$(docker run --rm "$MTG_IMAGE" \
-        generate-secret --hex "$DEFAULT_DOMAIN")
+    # docker run сам скачает образ если его нет - как в оригинальных командах
+    SECRET=$(docker run --rm "$MTG_IMAGE" generate-secret --hex "$DEFAULT_DOMAIN")
 
     if [[ -z "$SECRET" ]]; then
         log_error "Не удалось сгенерировать секрет!"
@@ -224,7 +197,7 @@ start_container() {
         docker rm mtg-proxy 2>/dev/null || true
     fi
 
-    log_info "Запуск контейнера из образа: $MTG_IMAGE"
+    log_info "Запуск контейнера..."
 
     docker run -d \
         --name mtg-proxy \
@@ -265,7 +238,6 @@ get_access_link() {
     echo -e "${YELLOW}Порт прокси:${NC} $SELECTED_PORT"
     echo -e "${YELLOW}Порт статистики:${NC} $STATS_PORT (только localhost)"
     echo -e "${YELLOW}Секрет:${NC} $SECRET"
-    echo -e "${YELLOW}Образ:${NC} $MTG_IMAGE"
     echo ""
     echo -e "${BLUE}Как смотреть статистику (с локальной машины):${NC}"
     echo ""
@@ -298,7 +270,6 @@ echo -e "${NC}"
 check_root
 select_port
 install_docker
-pull_image       # <- новый шаг с fallback логикой
 generate_secret
 create_config
 setup_firewall
