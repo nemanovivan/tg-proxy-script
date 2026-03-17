@@ -20,6 +20,9 @@ FALLBACK_PORTS=(8443 2053 2087 2096)
 STATS_PORT=3129
 CONFIG_FILE="$(pwd)/config.toml"
 
+# Образ - используем ghcr.io как зеркало вместо Docker Hub
+MTG_IMAGE="ghcr.io/nineseconds/mtg:2"
+
 # ============================================
 # Функции
 # ============================================
@@ -121,12 +124,37 @@ install_docker() {
     log_info "Docker успешно установлен: $(docker --version)"
 }
 
+# Скачиваем образ с fallback логикой
+pull_image() {
+    log_step "Загрузка образа MTG"
+
+    # Список зеркал в порядке приоритета
+    local mirrors=(
+        "ghcr.io/nineseconds/mtg:2"
+        "nineseconds/mtg:2"
+    )
+
+    for image in "${mirrors[@]}"; do
+        log_info "Пробуем загрузить образ: $image"
+        if docker pull "$image" 2>/dev/null; then
+            log_info "Образ успешно загружен: $image"
+            MTG_IMAGE="$image"
+            return
+        fi
+        log_warn "Не удалось загрузить с $image, пробуем следующее..."
+    done
+
+    log_error "Не удалось загрузить образ ни с одного источника!"
+    log_error "Попробуйте: docker login - и запустите скрипт снова"
+    exit 1
+}
+
 generate_secret() {
     log_step "Генерация секрета MTG"
 
     log_info "Используем домен: $DEFAULT_DOMAIN"
 
-    SECRET=$(docker run --rm nineseconds/mtg:2 \
+    SECRET=$(docker run --rm "$MTG_IMAGE" \
         generate-secret --hex "$DEFAULT_DOMAIN")
 
     if [[ -z "$SECRET" ]]; then
@@ -153,59 +181,37 @@ EOF
     cat "$CONFIG_FILE"
 }
 
-# Настройка firewall - закрываем stats порт снаружи
 setup_firewall() {
     log_step "Настройка firewall для stats порта $STATS_PORT"
 
-    # Проверяем ufw
     if command -v ufw &>/dev/null; then
         log_info "Используем UFW..."
 
-        # Разрешаем SSH чтоб не потерять доступ
         ufw allow OpenSSH
-
-        # Разрешаем основной порт прокси снаружи
         ufw allow "${SELECTED_PORT}/tcp"
-
-        # Блокируем stats порт снаружи
-        # Разрешаем только с localhost (для SSH туннеля)
         ufw deny "${STATS_PORT}/tcp"
-
-        # Включаем если не включён
         ufw --force enable
 
         log_info "UFW правила применены"
 
-    # Проверяем iptables
     elif command -v iptables &>/dev/null; then
         log_info "Используем iptables..."
 
-        # Разрешаем уже установленные соединения
         iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-        # Разрешаем SSH
         iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-
-        # Разрешаем основной порт прокси
         iptables -A INPUT -p tcp --dport "${SELECTED_PORT}" -j ACCEPT
-
-        # Разрешаем stats порт ТОЛЬКО с localhost
         iptables -A INPUT -p tcp --dport "${STATS_PORT}" -s 127.0.0.1 -j ACCEPT
-
-        # Блокируем stats порт для всех остальных
         iptables -A INPUT -p tcp --dport "${STATS_PORT}" -j DROP
 
-        # Сохраняем правила
         if command -v iptables-save &>/dev/null; then
             iptables-save > /etc/iptables/rules.v4 2>/dev/null || \
             iptables-save > /etc/iptables.rules 2>/dev/null || \
-            log_warn "Не удалось сохранить правила iptables - они сбросятся после перезагрузки"
+            log_warn "Не удалось сохранить правила iptables"
         fi
 
         log_info "iptables правила применены"
     else
         log_warn "Не найден ufw или iptables - firewall не настроен!"
-        log_warn "Вручную закройте порт $STATS_PORT снаружи"
     fi
 }
 
@@ -218,7 +224,7 @@ start_container() {
         docker rm mtg-proxy 2>/dev/null || true
     fi
 
-    log_info "Запуск контейнера..."
+    log_info "Запуск контейнера из образа: $MTG_IMAGE"
 
     docker run -d \
         --name mtg-proxy \
@@ -226,10 +232,7 @@ start_container() {
         -p "${SELECTED_PORT}:${SELECTED_PORT}" \
         -p "127.0.0.1:${STATS_PORT}:${STATS_PORT}" \
         --restart unless-stopped \
-        nineseconds/mtg:2 run /config.toml
-
-    # -p "127.0.0.1:3129:3129" означает что порт доступен
-    # только через localhost - снаружи он недоступен даже без firewall
+        "$MTG_IMAGE" run /config.toml
 
     log_info "Ожидание запуска контейнера..."
     sleep 3
@@ -262,6 +265,7 @@ get_access_link() {
     echo -e "${YELLOW}Порт прокси:${NC} $SELECTED_PORT"
     echo -e "${YELLOW}Порт статистики:${NC} $STATS_PORT (только localhost)"
     echo -e "${YELLOW}Секрет:${NC} $SECRET"
+    echo -e "${YELLOW}Образ:${NC} $MTG_IMAGE"
     echo ""
     echo -e "${BLUE}Как смотреть статистику (с локальной машины):${NC}"
     echo ""
@@ -294,6 +298,7 @@ echo -e "${NC}"
 check_root
 select_port
 install_docker
+pull_image       # <- новый шаг с fallback логикой
 generate_secret
 create_config
 setup_firewall
