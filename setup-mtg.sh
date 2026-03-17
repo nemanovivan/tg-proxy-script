@@ -86,34 +86,8 @@ install_docker() {
     log_info "Обновление пакетов..."
     apt-get update -qq
 
-    log_info "Установка зависимостей..."
-    apt-get install -y -qq \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release
-
-    log_info "Добавление GPG ключа Docker..."
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.gpg
-
-    log_info "Добавление репозитория Docker..."
-    echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-        https://download.docker.com/linux/ubuntu \
-        $(lsb_release -cs) stable" \
-        | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-    log_info "Установка Docker Engine..."
-    apt-get update -qq
-    apt-get install -y -qq \
-        docker-ce \
-        docker-ce-cli \
-        containerd.io \
-        docker-buildx-plugin \
-        docker-compose-plugin
+    log_info "Установка Docker..."
+    apt-get install -y -qq docker.io
 
     log_info "Запуск службы Docker..."
     systemctl enable docker
@@ -127,7 +101,6 @@ generate_secret() {
 
     log_info "Используем домен: $DEFAULT_DOMAIN"
 
-    # docker run сам скачает образ если его нет - как в оригинальных командах
     SECRET=$(docker run --rm "$MTG_IMAGE" generate-secret --hex "$DEFAULT_DOMAIN")
 
     if [[ -z "$SECRET" ]]; then
